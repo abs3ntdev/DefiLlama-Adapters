@@ -1,5 +1,5 @@
 const { uniV3Export } = require('../helper/uniswapV3')
-const { cachedGraphQuery, configPost, getConfig } = require('../helper/cache')
+const { cachedGraphQuery, getConfig } = require('../helper/cache')
 const { sumTokens2 } = require('../helper/unwrapLPs')
 
 const graphs = {
@@ -9,7 +9,6 @@ const graphs = {
   polygon: "3hCPRGf4z88VC5rsBKU5AA9FBBq5nF3jbKJG7VZCbhjm",
   celo: "ESdrTJ3twMwWVoQ1hUE2u7PugEHX3QkenudD6aXCkDQ4",
   bsc: "F85MNzUGYqgSHSHRGgeVMNsdnW1KtZSVgFULumXRZTw2",
-  // avax: "3Pwd3cqFKbqKAyaJfGUVmJJ7oYbFQLDa19iB27iMxebD",
   base: "43Hwfi3dJSoGpyas9VwNoDAv55yjgGrPpNSmbQZArzMG",
 }
 
@@ -42,21 +41,17 @@ function v3TvlPaged(chain) {
   }
 }
 
-async function filecoinTvl(api) {
-  const { result: { pools } } = await configPost('oku-trade/filecoin', 'https://cush.apiary.software/filecoin', {
-    "jsonrpc": "2.0",
-    "method": "cush_topPools",
-    "params": [
-      {
-        "result_size": 1000,
-        "sort_by": "tx_count",
-        "sort_order": false
-      }
-    ],
-    "id": 0
-  })
-  const ownerTokens = pools.map(i => [[i.t0, i.t1], i.address])
-  return api.sumTokens({ ownerTokens })
+const tvlUsingOku = (configKey, url) => {
+  return async (api) => {
+    const { result } = await getConfig(configKey, url)
+    const pools = result.map(i => i.pool)
+    const [token0s, token1s] = await Promise.all([
+      api.multiCall({ abi: 'address:token0', calls: pools }),
+      api.multiCall({ abi: 'address:token1', calls: pools }),
+    ])
+    const ownerTokens = pools.map((pool, i) => [[token0s[i], token1s[i]], pool])
+    return sumTokens2({ api, ownerTokens })
+  }
 }
 
 
@@ -73,7 +68,6 @@ module.exports = {
     [1620156420, "UNI V3 Launch"]
   ],
   ...uniV3Export({
-    // base: { factory: '0x33128a8fc17869897dce68ed026d694621f6fdfd', fromBlock: 1371680, blacklistedTokens: blacklists.base },
     celo: { factory: '0xAfE208a311B21f13EF87E33A90049fC17A7acDEc', fromBlock: 13916355, },
     moonbeam: { factory: '0x28f1158795a3585caaa3cd6469cd65382b89bb70', fromBlock: 4313505 },
     era: { factory: '0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422', fromBlock: 12637080 },
@@ -93,7 +87,6 @@ module.exports = {
     lisk: { factory: "0x0d922Fb1Bc191F64970ac40376643808b4B74Df9", fromBlock: 577168 },
     wc: { factory: "0x7a5028BDa40e7B173C278C5342087826455ea25a", fromBlock: 1603366 },
   }),
-  filecoin: { tvl: filecoinTvl },
 }
 
 const chains = ['ethereum', 'arbitrum', 'optimism', 'polygon', 'bsc', 'base']
@@ -104,11 +97,10 @@ chains.forEach(chain => {
   }
 })
 
-module.exports.sei.tvl = async (api) => {
-  const { result } = await getConfig('oku-trade/sei', 'https://omni.icarus.tools/sei/cush/getAllPoolsInOrder')
-  const pools = result.map(i => i.pool)
-  const token0s = await api.multiCall({ abi: 'address:token0', calls: pools })
-  const token1s = await api.multiCall({ abi: 'address:token1', calls: pools })
-  const ownerTokens = pools.map((pool, i) => [[token0s[i], token1s[i]], pool])
-  return sumTokens2({ api, ownerTokens })
-}
+const okuChains = ['sei', 'filecoin']
+
+okuChains.forEach(chain => {
+  module.exports[chain] = {
+    tvl: tvlUsingOku('oku-trade/' + chain, 'https://omni.icarus.tools/' + chain + '/cush/getAllPoolsInOrder'),
+  }
+})
